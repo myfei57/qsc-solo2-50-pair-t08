@@ -35,4 +35,6 @@ def schedule_next(
         assignment = assign_next(fleet, queue, registry, bus, assigned_at)
         if assignment is None and len(queue) == 0:
             scheduler.transition(SchedulerPhase.DRAINED)
+        else:
+            scheduler.transition(SchedulerPhase.IDLE)
         return assignment

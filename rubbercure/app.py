@@ -272,6 +272,7 @@ class Platform:
                 scheduler=self.scheduler,
                 fleet=self.fleet,
                 press=self.press(press_id),
+                latch=self.latch,
             )
             return sequence.run()
 
@@ -298,6 +299,8 @@ class Platform:
                 per_press.append(summary)
                 self.trend.append("mold_temp", moment, reading.average_c())
                 self.trend.append("steam_pressure", moment, unit.steam.pressure_kpa)
+            if self.scheduler.unsettled_reports():
+                self.scheduler.settle_dispatch(self.fleet, self.registry, moment)
             self.trend.append("fleet_load", moment, len(self.fleet.idle_presses()) / self.fleet.size)
             return {
                 "cycle": self._cycles,
@@ -402,6 +405,7 @@ class Platform:
         for thread in threads:
             thread.join()
         reports = self.scheduler.recent_reports(limit=rounds * max(1, len(presses)))
+        self.scheduler.mark_reports_settled(report.sequence for report in reports)
         first = [
             (item["mold_id"], item["press_id"], item["sequence"])
             for item in self.scheduler.ordered_reports(limit=len(reports), window_s=0.0)

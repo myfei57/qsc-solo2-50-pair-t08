@@ -78,6 +78,14 @@ class DispatchQueue:
     def _ordered(self) -> list[QueueEntry]:
         return sorted(self._entries, key=lambda item: (-item.priority, item.sequence))
 
+    def peek_next(self) -> QueueEntry | None:
+        """查看优先级最高、同优先级最早入队的一条任务，但不移除。"""
+
+        with self._lock:
+            if not self._entries:
+                return None
+            return self._ordered()[0]
+
     def pop_next(self) -> QueueEntry | None:
         """取出优先级最高、同优先级最早入队的一条任务。"""
 

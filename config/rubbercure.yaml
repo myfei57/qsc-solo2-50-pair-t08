@@ -39,6 +39,7 @@ limits:
     drain_hold_s: 30.0
   batch:
     dispatch_window_s: 180.0
+    completion_settle_s: 1.0
     max_queue: 12
 
 pages:

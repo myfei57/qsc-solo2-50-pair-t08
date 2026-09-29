@@ -264,17 +264,27 @@ class BatchLimits:
     """机群调度约束。"""
 
     dispatch_window_s: float
+    completion_settle_s: float
     max_queue: int
 
     @classmethod
     def from_mapping(cls, section: Mapping[str, Any]) -> "BatchLimits":
         return cls(
             dispatch_window_s=_number(section, "dispatch_window_s", minimum=1.0),
+            completion_settle_s=_number(
+                section, "completion_settle_s", minimum=0.0
+            )
+            if "completion_settle_s" in section
+            else 1.0,
             max_queue=_integer(section, "max_queue", minimum=1),
         )
 
     def as_dict(self) -> dict:
-        return {"dispatch_window_s": self.dispatch_window_s, "max_queue": self.max_queue}
+        return {
+            "dispatch_window_s": self.dispatch_window_s,
+            "completion_settle_s": self.completion_settle_s,
+            "max_queue": self.max_queue,
+        }
 
 
 @dataclass(frozen=True)
@@ -378,7 +388,11 @@ def default_config() -> PlatformConfig:
             alarm_outlet_c=48.0,
             drain_hold_s=30.0,
         ),
-        batch=BatchLimits(dispatch_window_s=180.0, max_queue=12),
+        batch=BatchLimits(
+            dispatch_window_s=180.0,
+            completion_settle_s=1.0,
+            max_queue=12,
+        ),
         pages=("press", "steam", "timer", "alarms"),
     )
 

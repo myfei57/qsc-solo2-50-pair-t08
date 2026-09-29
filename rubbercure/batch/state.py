@@ -25,7 +25,10 @@ class SchedulerStateMachine:
     _ALLOWED = {
         SchedulerPhase.IDLE: (SchedulerPhase.DISPATCHING,),
         SchedulerPhase.DISPATCHING: (SchedulerPhase.IDLE, SchedulerPhase.DRAINED),
-        SchedulerPhase.DRAINED: (SchedulerPhase.IDLE,),
+        SchedulerPhase.DRAINED: (
+            SchedulerPhase.IDLE,
+            SchedulerPhase.DISPATCHING,
+        ),
     }
 
     def __init__(self) -> None:
