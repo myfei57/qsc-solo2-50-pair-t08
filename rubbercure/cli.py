@@ -83,7 +83,13 @@ def _cmd_demo(args: argparse.Namespace) -> int:
     platform.register_mold("next-mold", cavity_count=4)
     platform.enqueue_mold("next-mold")
     openmold = platform.run_open("press-01")
-    dispatch = platform.run_dispatch("press-01")
+    dispatch_sequence = platform.run_dispatch("press-01")
+    completion = {"report": dispatch_sequence["assigned"], "pending": platform.scheduler.pending_reports()}
+    if args.fast:
+        clock.advance(config.batch.settle_delay_s + 0.1)
+    else:
+        platform.clock.sleep(config.batch.settle_delay_s + 0.1)
+    dispatch = platform.run_settle_dispatch()
     stop = platform.run_stop("press-01")
 
     server = ConsoleServer(platform)
@@ -98,6 +104,8 @@ def _cmd_demo(args: argparse.Namespace) -> int:
         "setpoint_probe": setpoint_probe,
         "report_probe": report_probe,
         "open": openmold,
+        "completion": completion,
+        "dispatch_sequence": dispatch_sequence,
         "dispatch": dispatch,
         "stop": stop,
         "probe": probe,
@@ -105,7 +113,8 @@ def _cmd_demo(args: argparse.Namespace) -> int:
     }
     _dump(report)
     failures = list(cure["violations"])
-    failures += list(openmold["violations"]) + list(dispatch["violations"]) + list(stop["violations"])
+    failures += list(openmold["violations"])
+    failures += list(dispatch_sequence["violations"]) + list(stop["violations"])
     failures += [name for name, item in probe.items() if not item["ok"]]
     if failures:
         print(f"检查未通过: {failures}", file=sys.stderr)

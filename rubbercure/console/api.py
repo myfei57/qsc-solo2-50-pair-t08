@@ -14,6 +14,12 @@ MAX_TREND_WINDOW_S = 86_400.0
 MAX_AUDIT_LIMIT = 500
 
 
+def _as_bool(value: object) -> bool:
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+    return bool(value)
+
+
 class ConsoleAPI:
     """把 HTTP 请求转成平台动作。"""
 
@@ -116,8 +122,29 @@ class ConsoleAPI:
         try:
             return {
                 "ok": True,
-                "report": self.platform.run_dispatch(str(payload.get("press_id", "press-01"))),
+                "report": self.platform.run_dispatch(
+                    str(payload.get("press_id", "press-01")),
+                    settle_immediately=_as_bool(payload.get("force", False)),
+                ),
             }
+        except RubberCureError as error:
+            return {"ok": False, "error": self.platform.note_error(error)}
+
+    def complete(self, payload: dict) -> dict:
+        try:
+            return {
+                "ok": True,
+                "report": self.platform.run_completion_report(
+                    str(payload.get("press_id", "press-01"))
+                ),
+            }
+        except RubberCureError as error:
+            return {"ok": False, "error": self.platform.note_error(error)}
+
+    def settle(self, payload: dict) -> dict:
+        try:
+            include_all = _as_bool(payload.get("force", False))
+            return {"ok": True, "settled": self.platform.run_settle_dispatch(include_all=include_all)}
         except RubberCureError as error:
             return {"ok": False, "error": self.platform.note_error(error)}
 
@@ -147,13 +174,15 @@ class ConsoleAPI:
 
     def enqueue(self, payload: dict) -> dict:
         mold_id = str(payload.get("mold_id", "mold-01"))
+        urgent = _as_bool(payload.get("urgent", False))
         try:
             return {
                 "ok": True,
                 "queued": self.platform.enqueue_mold(
                     mold_id,
                     thickness_mm=payload.get("thickness_mm"),
-                    priority=int(payload.get("priority", 50)),
+                    priority=int(payload.get("priority", 100 if urgent else 50)),
+                    urgent=urgent,
                 ),
             }
         except RubberCureError as error:

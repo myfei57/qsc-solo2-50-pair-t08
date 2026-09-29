@@ -102,6 +102,10 @@ class ConsoleRequestHandler(BaseHTTPRequestHandler):
                 self._send_json(self.api.open_mold(self._read_json()))
             elif parsed.path == "/api/dispatch":
                 self._send_json(self.api.dispatch(self._read_json()))
+            elif parsed.path == "/api/complete":
+                self._send_json(self.api.complete(self._read_json()))
+            elif parsed.path == "/api/settle":
+                self._send_json(self.api.settle(self._read_json()))
             elif parsed.path == "/api/stop":
                 self._send_json(self.api.stop(self._read_json()))
             elif parsed.path == "/api/step":

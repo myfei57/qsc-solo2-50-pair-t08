@@ -1,9 +1,9 @@
 """机群调度顺序。
 
 调度顺序固定为：完成上报、顺序确认、下一模分配、写审计。完成上报来自各台
-硫化机，顺序确认把并发上报排成可复现顺序，再据此挑空闲机位分配下一模，
-最后把这次派工写进审计。顺序确认必须先于分配，否则下一模会跟着线程调度
-随机挑机。
+硫化机，顺序确认把同一归集窗口内的并发上报排成可复现顺序，再据此向各上报
+机位分配下一模，最后把这次派工写进审计。上报只入待结算队列，真正分配由
+调度器统一结算，避免下一模跟着线程到达顺序漂移。
 """
 
 from __future__ import annotations
@@ -11,8 +11,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from ..batch.batch import BatchScheduler
-from ..batch.ordering import order_completions, ordering_keys
-from ..batch.schedule import schedule_next
+from ..batch.ordering import ordering_keys
+from ..batch.report import CompletionReport
 from ..clock import Clock
 from ..eventbus import Event, EventBus
 from ..mold.registry import MoldRegistry
@@ -37,6 +37,7 @@ class DispatchSequence:
     scheduler: BatchScheduler
     fleet: PressFleet
     press: CuringPress
+    settle_immediately: bool = False
     recorder: SequenceRecorder = field(init=False)
 
     def __post_init__(self) -> None:
@@ -51,13 +52,15 @@ class DispatchSequence:
         mold_id = str(timer.get("mold_id") or press.press_id)
         product_code = str(timer.get("product_code") or "")
         generation = int(timer.get("curve_generation") or 0)
+        now = self.clock.now()
 
         report = self.scheduler.record_report(
             press.press_id,
             mold_id,
             product_code,
-            self.clock.now(),
+            now,
             generation,
+            received_at=now,
         )
         self.recorder.note(
             "completion_report",
@@ -67,27 +70,52 @@ class DispatchSequence:
             sequence=report.sequence,
         )
 
-        ordered = order_completions(
-            self.scheduler.recent_reports(),
-            self.scheduler.limits.dispatch_window_s,
+        pending_before = list(self.scheduler.pending_reports())
+        settled = self.scheduler.dispatch_ready(
+            self.fleet,
+            self.registry,
+            now,
+            include_all=self.settle_immediately,
+        )
+        remaining_sequences = {item["sequence"] for item in self.scheduler.pending_reports()}
+        ordered = sorted(
+            (
+                CompletionReport(
+                    press_id=item["press_id"],
+                    mold_id=item["mold_id"],
+                    product_code=item["product_code"],
+                    completed_at=item["completed_at"],
+                    curve_generation=item["curve_generation"],
+                    sequence=item["sequence"],
+                )
+                for item in pending_before
+                if item["sequence"] not in remaining_sequences
+            ),
+            key=lambda item: (
+                item.completed_at,
+                item.press_id,
+                item.mold_id,
+                item.curve_generation,
+                item.sequence,
+            ),
         )
         self.recorder.note(
-            "order_confirm", "batch", confirmed=len(ordered), window_s=self.scheduler.limits.dispatch_window_s
+            "order_confirm",
+            "batch",
+            confirmed=len(ordered),
+            pending=settled["pending"],
+            window_s=self.scheduler.limits.dispatch_window_s,
+            settle_delay_s=self.scheduler.limits.settle_delay_s,
         )
 
-        assignment = schedule_next(
-            self.scheduler,
-            self.fleet,
-            self.scheduler.queue,
-            self.registry,
-            self.bus,
-            self.clock.now(),
-        )
+        assignments = settled["assignments"]
+        assignment = assignments[0] if assignments else None
         self.recorder.note(
             "mold_assigned",
             "batch",
-            press_id=assignment.press_id if assignment else "",
-            mold_id=assignment.mold_id if assignment else "",
+            press_id=assignment["press_id"] if assignment else "",
+            mold_id=assignment["mold_id"] if assignment else "",
+            count=len(assignments),
         )
 
         self.bus.publish(
@@ -99,18 +127,21 @@ class DispatchSequence:
                 severity="info",
                 ordered=[item.mold_id for item in ordered],
                 ordering=ordering_keys(ordered),
-                assigned=(assignment.as_dict() if assignment else None),
+                reports=settled["reports"],
+                assignments=assignments,
+                assigned=assignment,
             )
         )
         self.recorder.note("audit_note", "audit", mold_id=mold_id)
-        return self.report(mold_id, assignment)
+        return self.report(mold_id, assignments)
 
-    def report(self, mold_id: str, assignment) -> dict:
+    def report(self, mold_id: str, assignments: list[dict]) -> dict:
         return {
             "mold_id": mold_id,
             "steps": self.recorder.names(),
             "violations": verify_order(self.recorder.names(), DISPATCH_ORDER),
             "queued": self.scheduler.queue.entries(),
-            "assigned": assignment.as_dict() if assignment else None,
+            "assigned": assignments[0] if assignments else None,
+            "assignments": assignments,
             "scheduler_phase": self.scheduler.phase.value,
         }

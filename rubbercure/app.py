@@ -189,15 +189,37 @@ class Platform:
         )
         return record.as_dict()
 
-    def enqueue_mold(self, mold_id: str, thickness_mm: float | None = None, priority: int = 50) -> dict:
-        """把一台已登记模具排进调度队列。"""
+    def enqueue_mold(
+        self,
+        mold_id: str,
+        thickness_mm: float | None = None,
+        priority: int = 50,
+        urgent: bool = False,
+    ) -> dict:
+        """把一台已登记模具排进调度队列；``urgent=True`` 走插单容量。"""
 
         thickness = (
             self.config.press.default_thickness_mm if thickness_mm is None else float(thickness_mm)
         )
         profile = BatchProfile.resolve(mold_id, thickness, self.registry, self.curves)
-        entry = self.scheduler.enqueue(profile, self.clock.now(), priority=priority)
+        if urgent:
+            entry = self.scheduler.enqueue_urgent(profile, self.clock.now(), priority=priority)
+        else:
+            entry = self.scheduler.enqueue(
+                profile, self.clock.now(), priority=priority, urgent=False
+            )
         return {"profile": profile.as_dict(), "entry": entry.as_dict()}
+
+    def settle_dispatch(self, include_all: bool = False) -> dict:
+        """推进一次可复现派工结算。"""
+
+        with self._lock:
+            return self.scheduler.dispatch_ready(
+                self.fleet,
+                self.registry,
+                self.clock.now(),
+                include_all=include_all,
+            )
 
     def run_cure(
         self,
@@ -261,8 +283,8 @@ class Platform:
             )
             return sequence.run()
 
-    def run_dispatch(self, press_id: str = DEFAULT_PRESS_ID) -> dict:
-        """在一台硫化机上跑一次机群调度顺序。"""
+    def run_dispatch(self, press_id: str = DEFAULT_PRESS_ID, settle_immediately: bool = False) -> dict:
+        """在一台硫化机上上报完成，并按归集窗口或手动强制结算。"""
 
         with self._lock:
             sequence = DispatchSequence(
@@ -272,8 +294,30 @@ class Platform:
                 scheduler=self.scheduler,
                 fleet=self.fleet,
                 press=self.press(press_id),
+                settle_immediately=settle_immediately,
             )
             return sequence.run()
+
+    def run_completion_report(self, press_id: str = DEFAULT_PRESS_ID) -> dict:
+        """只上报完成，不立即派工；派工由控制周期或结算入口统一处理。"""
+
+        with self._lock:
+            press = self.press(press_id)
+            timer = press.timer.snapshot()
+            report = self.scheduler.record_report(
+                press.press_id,
+                str(timer.get("mold_id") or press.press_id),
+                str(timer.get("product_code") or ""),
+                self.clock.now(),
+                int(timer.get("curve_generation") or 0),
+                received_at=self.clock.now(),
+            )
+            return {"report": report.as_dict(), "pending": self.scheduler.pending_reports()}
+
+    def run_settle_dispatch(self, include_all: bool = False) -> dict:
+        """统一结算待派工完成上报。"""
+
+        return self.settle_dispatch(include_all=include_all)
 
     def run_stop(self, press_id: str = DEFAULT_PRESS_ID) -> dict:
         """在一台硫化机上跑停运顺序。"""
@@ -298,11 +342,13 @@ class Platform:
                 per_press.append(summary)
                 self.trend.append("mold_temp", moment, reading.average_c())
                 self.trend.append("steam_pressure", moment, unit.steam.pressure_kpa)
+            dispatch = self.scheduler.dispatch_ready(self.fleet, self.registry, moment)
             self.trend.append("fleet_load", moment, len(self.fleet.idle_presses()) / self.fleet.size)
             return {
                 "cycle": self._cycles,
                 "dt": state.dt,
                 "presses": per_press,
+                "dispatch": dispatch,
                 "idle": [unit.press_id for unit in self.fleet.idle_presses()],
             }
 
@@ -391,6 +437,8 @@ class Platform:
                     self.config.press.default_product_code,
                     float(step),
                     1,
+                    received_at=float(step),
+                    track_pending=False,
                 )
 
         threads = [
@@ -493,6 +541,8 @@ class Platform:
                 "/api/stop",
                 "/api/step",
                 "/api/enqueue",
+                "/api/complete",
+                "/api/settle",
                 "/api/remap",
                 "/api/retire",
             ],

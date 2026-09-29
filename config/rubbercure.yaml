@@ -39,7 +39,9 @@ limits:
     drain_hold_s: 30.0
   batch:
     dispatch_window_s: 180.0
+    settle_delay_s: 2.0
     max_queue: 12
+    max_urgent_queue: 4
 
 pages:
   - press

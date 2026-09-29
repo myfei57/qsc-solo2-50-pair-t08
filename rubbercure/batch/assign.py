@@ -2,7 +2,8 @@
 
 调度把队首任务分配给一台空闲硫化机：装模、记录分配、发布事件。分配要求
 目标机当前没有在机模具——同一台机在完成上报之前不能被再次分配，否则两个
-模次会挤在同一台机上。
+模次会挤在同一台机上。完成上报触发的派工回到上报机位，保证同一批完成上报
+按稳定顺序一一对应。
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from .queue import DispatchQueue
 
 if TYPE_CHECKING:  # pragma: no cover - 仅用于类型标注
     from ..press.fleet import PressFleet
+    from ..press.press import CuringPress
 
 
 @dataclass(frozen=True)
@@ -38,23 +40,36 @@ class Assignment:
         }
 
 
+def _available(fleet: "PressFleet") -> list["CuringPress"]:
+    return [unit for unit in fleet.idle_presses() if unit.mold_id is None]
+
+
 def assign_next(
     fleet: "PressFleet",
     queue: DispatchQueue,
     registry: MoldRegistry,
     bus: EventBus,
     assigned_at: float,
+    target_press_id: str | None = None,
 ) -> Assignment | None:
-    """把队首任务分配给一台空闲机位；无任务或无机位时返回 None。"""
+    """把队首任务分配给指定或编号最小的空闲机位；无任务或无机位时返回 None。"""
 
-    idle = [unit for unit in fleet.idle_presses() if unit.mold_id is None]
+    idle = _available(fleet)
     if not idle:
         return None
-    entry = queue.pop_next()
+    if target_press_id is not None:
+        candidates = [unit for unit in idle if unit.press_id == target_press_id]
+        if not candidates:
+            return None
+        target = candidates[0]
+    else:
+        target = idle[0]
+
+    entry = queue.peek_next()
     if entry is None:
         return None
     registry.require_active(entry.mold_id)
-    target = idle[0]
+    queue.pop_next()
     target.load_mold(entry.mold_id)
     assignment = Assignment(
         press_id=target.press_id,
